@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TANK.io</title>
+<style>
+:root{--card:#fff;--tx:#222;--ac:#00b2e1;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--card:#2a2a2e;--tx:#eee}}
+:root[data-theme="dark"]{--card:#2a2a2e;--tx:#eee}
+html,body{height:100%;margin:0;overflow:hidden;background:#b5b5b5;font-family:system-ui,-apple-system,"Malgun Gothic",sans-serif;user-select:none}
+canvas{display:block;width:100%;height:100%;cursor:crosshair;touch-action:none}
+#ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}
+.card{background:var(--card);color:var(--tx);padding:28px 32px;border-radius:14px;text-align:center;max-width:360px;box-shadow:0 8px 30px rgba(0,0,0,.3)}
+h1{margin:0 0 6px;font-size:34px;letter-spacing:2px;color:var(--ac)}
+p{margin:6px 0 14px;font-size:14px;line-height:1.5;opacity:.85}
+input{width:100%;box-sizing:border-box;padding:10px;font-size:16px;border:2px solid var(--ac);border-radius:8px;background:transparent;color:var(--tx);text-align:center;outline:0}
+button{margin-top:12px;width:100%;padding:11px;font-size:17px;font-weight:700;border:0;border-radius:8px;background:var(--ac);color:#fff;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="ov"><div class="card"><h1 id="tt">TANK.io</h1>
+<p id="sub">서버에 연결하는 중이에요…</p>
+<input id="nm" maxlength="12" placeholder="닉네임" autocomplete="off"><button id="go" disabled>시작</button></div></div>
+<script>
+'use strict';
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),ov=document.getElementById('ov'),$=id=>document.getElementById(id);
+let W,H;function rs(){const d=devicePixelRatio||1;W=innerWidth;H=innerHeight;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0)}
+addEventListener('resize',rs);rs();
+const STATS=[['체력 회복','#ef9e6f'],['최대 체력','#d96ae0'],['몸통 데미지','#8a5ce0'],['총알 속도','#5f82e8'],['총알 관통','#e8d24a'],['총알 데미지','#e85a5a'],['재장전','#6ee05a'],['이동 속도','#4ad0e8']],MAXL=7;
+let ws=null,ready=false,myId=null,state='menu',mode='start',WORLD=3000,CL={},SHT=[],ents={t:new Map(),s:new Map(),b:new Map()},you=null,lb=[],mini=[],feed=[],parts=[],keys={},mouse={x:0,y:0,down:false},auto=false,tj={l:null,r:null},cam={x:1500,y:1500},ZM=1,aim=0,frame=0,lastDead=null;
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const fmt=n=>n>=1000?(n/1000).toFixed(n>=10000?0:1)+'k':''+n;
+const col=id=>id===myId?['#00b2e1','#0085a8']:['#f14e54','#b43a3e'];
+const rad=e=>(20+e.lv*.45)*((CL[e.cls]&&CL[e.cls].rs)||1);
+
+// ---------- 서버 연결 ----------
+function connect(){
+  ready=false;
+  const s=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);ws=s;
+  s.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(x){return}onMsg(m)};
+  s.onclose=()=>{if(ws!==s)return;ready=false;state='menu';showMenu('lost');setTimeout(connect,2000)};
+}
+function onMsg(m){switch(m.t){
+case'hello':CL=m.CL;SHT=m.SH;WORLD=m.W;ready=true;if(state==='menu')showMenu('start');break;
+case'spawn':myId=m.id;ents.t.clear();ents.s.clear();ents.b.clear();you=null;state='play';ov.style.display='none';mouse.down=false;break;
+case's':snap(m);break;
+case'dead':state='dead';lastDead=m;showMenu('dead');break;
+case'kill':feed.push({s:m.k+' ▶ '+m.v,l:240});if(feed.length>6)feed.shift();break;
+case'full':showMenu('full');break}}
+function syncMap(map,list,mkf,upd,gone){const seen=new Set();for(const a of list){seen.add(a[0]);let e=map.get(a[0]);if(!e){e=mkf(a);map.set(a[0],e)}upd(e,a)}
+for(const[id,e]of map)if(!seen.has(id)){map.delete(id);if(gone)gone(e)}}
+const vis=(x,y)=>Math.abs(x-cam.x)<W/2/ZM+40&&Math.abs(y-cam.y)<H/2/ZM+40;
+function burst(x,y,c){for(let i=0;i<12;i++){const a=rnd(0,6.28),s=rnd(1,4);parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:25,c})}}
+function snap(m){you=m.y;lb=m.L;mini=m.M;
+syncMap(ents.t,m.T,a=>({id:a[0],x:a[1],y:a[2],ang:a[5]}),(e,a)=>{e.tx=a[1];e.ty=a[2];e.vx=a[3];e.vy=a[4];e.ta=a[5];e.hp=a[6];e.mh=a[7];e.lv=a[8];e.cls=a[9];e.name=a[10];e.hurt=a[11];e.rec=a[12];e.inv=a[13]},e=>{if(vis(e.x,e.y))burst(e.x,e.y,col(e.id)[0])});
+syncMap(ents.s,m.S,a=>({id:a[0],x:a[2],y:a[3],a:a[4]}),(e,a)=>{e.type=a[1];e.tx=a[2];e.ty=a[3];e.a=a[4];e.va=a[5];e.vx=a[6];e.vy=a[7];e.hurt=a[8]},e=>{if(vis(e.x,e.y)&&SHT[e.type])burst(e.x,e.y,SHT[e.type].c)});
+syncMap(ents.b,m.B,a=>({id:a[0],x:a[1],y:a[2]}),(e,a)=>{e.tx=a[1];e.ty=a[2];e.vx=a[3];e.vy=a[4];e.r=a[5];e.kd=a[6];e.o=a[7]},null)}
+function stepAll(){frame++;
+if(state==='play'&&!tj.r)aim=Math.atan2(mouse.y-H/2,mouse.x-W/2);
+for(const e of ents.t.values()){e.tx+=e.vx;e.ty+=e.vy;e.x+=(e.tx-e.x)*.3;e.y+=(e.ty-e.y)*.3;
+if(e.id===myId&&state==='play')e.ang=aim;else{const d=Math.atan2(Math.sin(e.ta-e.ang),Math.cos(e.ta-e.ang));e.ang+=d*.4}}
+for(const e of ents.s.values()){e.tx+=e.vx;e.ty+=e.vy;e.x+=(e.tx-e.x)*.3;e.y+=(e.ty-e.y)*.3;e.a+=e.va}
+for(const e of ents.b.values()){e.tx+=e.vx;e.ty+=e.vy;e.x+=(e.tx-e.x)*.5;e.y+=(e.ty-e.y)*.5}
+const me=ents.t.get(myId);if(me){cam.x=me.x;cam.y=me.y}
+for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx;p.y+=p.vy;if(--p.l<=0)parts.splice(i,1)}
+feed=feed.filter(f=>--f.l>0)}
+
+// ---------- 그리기 ----------
+function poly(x,y,r,n,a,f,s){ctx.beginPath();for(let i=0;i<n;i++){const t=a+i*6.283/n;ctx[i?'lineTo':'moveTo'](x+Math.cos(t)*r,y+Math.sin(t)*r)}ctx.closePath();ctx.fillStyle=f;ctx.fill();ctx.strokeStyle=s;ctx.lineWidth=3;ctx.stroke()}
+function bar(x,y,w,h,p,c){ctx.fillStyle='rgba(0,0,0,.35)';ctx.fillRect(x,y,w,h);ctx.fillStyle=c;ctx.fillRect(x,y,w*Math.max(0,Math.min(1,p)),h)}
+function icon(n,cx,cy){const c=CL[n];if(!c)return;const r=9;ctx.save();ctx.translate(cx,cy);ctx.fillStyle='#999';ctx.strokeStyle='#6e6e6e';ctx.lineWidth=2;
+for(const b of c.b){ctx.save();ctx.rotate(b[0]);ctx.translate(0,b[1]*r);const L=r*b[2],w=r*b[3];ctx.beginPath();if(b[4]){ctx.moveTo(0,-w*.3);ctx.lineTo(L,-w/2);ctx.lineTo(L,w/2);ctx.lineTo(0,w*.3)}else ctx.rect(0,-w/2,L,w);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore()}
+if(n==='Smasher')poly(0,0,r*1.25,6,.3,'#6b6b6b','#4a4a4a');
+ctx.beginPath();ctx.arc(0,0,r*(c.rs||1),0,7);ctx.fillStyle='#00b2e1';ctx.fill();ctx.strokeStyle='#0085a8';ctx.lineWidth=2;ctx.stroke();ctx.restore()}
+function drawTank(e){const r=rad(e),c=CL[e.cls],[fc,sc]=col(e.id);if(!c)return;
+ctx.globalAlpha=e.inv&&frame%20<10?.5:1;
+ctx.fillStyle='#999';ctx.strokeStyle='#6e6e6e';ctx.lineWidth=3;
+for(const b of c.b){ctx.save();ctx.translate(e.x,e.y);ctx.rotate(e.ang+b[0]);ctx.translate(0,b[1]*r);const L=r*b[2]-e.rec*.8,w=r*b[3];ctx.beginPath();
+if(b[4]){ctx.moveTo(0,-w*.3);ctx.lineTo(L,-w/2);ctx.lineTo(L,w/2);ctx.lineTo(0,w*.3)}else ctx.rect(0,-w/2,L,w);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore()}
+if(e.cls==='Smasher')poly(e.x,e.y,r*1.25,6,frame*.06,'#6b6b6b','#4a4a4a');
+ctx.beginPath();ctx.arc(e.x,e.y,r,0,7);ctx.fillStyle=e.hurt>0?'#ffc9c9':fc;ctx.fill();ctx.strokeStyle=sc;ctx.lineWidth=3;ctx.stroke();ctx.globalAlpha=1;
+ctx.font='bold 13px system-ui,sans-serif';ctx.textAlign='center';ctx.fillStyle='#fff';ctx.strokeStyle='rgba(0,0,0,.5)';ctx.lineWidth=3;ctx.strokeText(e.name,e.x,e.y-r-12);ctx.fillText(e.name,e.x,e.y-r-12);
+if(e.hp<e.mh-.5)bar(e.x-r,e.y+r+8,r*2,5,e.hp/e.mh,'#85e37d')}
+function draw(){
+const lv=you?you.lv:1,fov=you&&CL[you.cls]?CL[you.cls].fov:1,z=Math.max(W/1600,H/900)*(1-Math.min(lv,45)*.006)*fov;ZM=z;
+ctx.fillStyle='#b5b5b5';ctx.fillRect(0,0,W,H);ctx.save();ctx.translate(W/2,H/2);ctx.scale(z,z);ctx.translate(-cam.x,-cam.y);
+ctx.fillStyle='#cdcdcd';ctx.fillRect(0,0,WORLD,WORLD);
+const x0=Math.max(0,cam.x-W/2/z),x1=Math.min(WORLD,cam.x+W/2/z),y0=Math.max(0,cam.y-H/2/z),y1=Math.min(WORLD,cam.y+H/2/z);
+ctx.strokeStyle='#c1c1c1';ctx.lineWidth=1;ctx.beginPath();
+for(let x=Math.ceil(x0/26)*26;x<=x1;x+=26){ctx.moveTo(x,y0);ctx.lineTo(x,y1)}
+for(let y=Math.ceil(y0/26)*26;y<=y1;y+=26){ctx.moveTo(x0,y);ctx.lineTo(x1,y)}ctx.stroke();
+for(const s of ents.s.values()){const d=SHT[s.type];if(d)poly(s.x,s.y,d.r,d.n,s.a,s.hurt>0?'#fff':d.c,d.sc)}
+for(const b of ents.b.values()){const[fc,sc]=col(b.o);
+if(b.kd===1)poly(b.x,b.y,b.r*1.6,3,Math.atan2(b.vy,b.vx),fc,sc);
+else if(b.kd===2)poly(b.x,b.y,b.r*1.3,3,frame*.03,fc,sc);
+else{ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,7);ctx.fillStyle=fc;ctx.fill();ctx.strokeStyle=sc;ctx.lineWidth=2.5;ctx.stroke()}}
+for(const e of ents.t.values())drawTank(e);
+for(const p of parts){ctx.globalAlpha=p.l/25;ctx.fillStyle=p.c;ctx.beginPath();ctx.arc(p.x,p.y,4,0,7);ctx.fill()}ctx.globalAlpha=1;ctx.restore();
+if(state!=='play'||!you)return;
+ctx.textAlign='center';ctx.font='bold 18px system-ui,sans-serif';ctx.fillStyle='#fff';ctx.strokeStyle='rgba(0,0,0,.55)';ctx.lineWidth=4;
+const sx=W/2,top=lb.length?lb[0][2]:1,mn=(ents.t.get(myId)||{}).name||'';ctx.font='bold 22px system-ui,sans-serif';ctx.strokeText(mn,sx,H-72);ctx.fillText(mn,sx,H-72);
+bar(sx-160,H-64,320,16,Math.max(.03,you.sc/(top||1)),'#f5d84a');bar(sx-110,H-44,220,18,you.xp/you.nd,'#4ad0a0');
+ctx.font='bold 12px system-ui,sans-serif';ctx.strokeText('점수: '+fmt(you.sc),sx,H-52);ctx.fillText('점수: '+fmt(you.sc),sx,H-52);ctx.strokeText('Lv '+you.lv+' '+you.cls,sx,H-30);ctx.fillText('Lv '+you.lv+' '+you.cls,sx,H-30);
+for(let i=0;i<8;i++){const y=H-12-(8-i)*22,on=you.pts>0&&you.st[i]<MAXL;ctx.globalAlpha=on?1:.65;ctx.fillStyle='rgba(0,0,0,.3)';ctx.fillRect(12,y,200,18);
+for(let k=0;k<MAXL;k++){ctx.fillStyle=k<you.st[i]?STATS[i][1]:'rgba(0,0,0,.25)';ctx.fillRect(14+k*28.2,y+2,26,14)}
+ctx.textAlign='left';ctx.fillStyle='#fff';ctx.font='bold 11px system-ui,sans-serif';ctx.fillText(STATS[i][0],18,y+13);ctx.textAlign='right';ctx.fillText('['+(i+1)+']',208,y+13)}
+ctx.globalAlpha=1;ctx.textAlign='left';if(you.pts>0){ctx.font='bold 13px system-ui,sans-serif';ctx.strokeText('업그레이드 포인트 x'+you.pts,14,H-12-8*22-8);ctx.fillText('업그레이드 포인트 x'+you.pts,14,H-12-8*22-8)}
+for(const k of['l','r'])if(tj[k]){const j=tj[k];ctx.globalAlpha=.3;ctx.fillStyle='#000';ctx.beginPath();ctx.arc(j.x,j.y,50,0,7);ctx.fill();ctx.beginPath();ctx.arc(j.px||j.x,j.py||j.y,22,0,7);ctx.fill();ctx.globalAlpha=1}
+ctx.textAlign='center';ctx.font='bold 13px system-ui,sans-serif';ctx.fillStyle='#fff';feed.slice(-4).forEach((f,i)=>{ctx.globalAlpha=Math.min(1,f.l/40);ctx.strokeText(f.s,W/2,28+i*18);ctx.fillText(f.s,W/2,28+i*18)});ctx.globalAlpha=1;
+const o=you.op||[];ctx.textAlign='center';o.forEach((n,i)=>{const x=12+(i%2)*78,y=14+Math.floor(i/2)*78;ctx.fillStyle=['#4fd6e8','#e8d24a','#6ee05a','#e85a5a','#b58cf0'][i%5];ctx.globalAlpha=.85;ctx.fillRect(x,y,70,70);ctx.globalAlpha=1;icon(n,x+35,y+30);ctx.fillStyle='#fff';ctx.font='bold 11px system-ui,sans-serif';ctx.strokeText(n,x+35,y+63);ctx.fillText(n,x+35,y+63)});
+if(W>520){ctx.textAlign='center';ctx.font='bold 14px system-ui,sans-serif';ctx.fillStyle='#fff';ctx.strokeText('순위',W-100,24);ctx.fillText('순위',W-100,24);
+lb.forEach((r,i)=>{const y=34+i*20;bar(W-172,y,160,16,r[2]/(lb[0][2]||1),r[0]===myId?'#4fd6e8':'#85e37d');ctx.textAlign='left';ctx.fillStyle='#fff';ctx.font='bold 11px system-ui,sans-serif';ctx.fillText(r[1],W-168,y+12);ctx.textAlign='right';ctx.fillText(fmt(r[2]),W-16,y+12)});
+const S=110,mx=W-S-12,my=H-S-12;ctx.fillStyle='rgba(0,0,0,.3)';ctx.fillRect(mx,my,S,S);
+for(const m of mini)if(m[2]===myId){ctx.fillStyle='#00b2e1';ctx.fillRect(mx+m[0]/300*S-3,my+m[1]/300*S-3,6,6)}}}
+
+// ---------- 메뉴 ----------
+function showMenu(md){mode=md;ov.style.display='flex';const tt=$('tt'),sub=$('sub'),go=$('go'),nm=$('nm');
+nm.style.display=md==='start'||md==='dead'?'':'none';go.style.display=md==='lost'?'none':'';go.disabled=false;
+if(md==='start'){tt.textContent='TANK.io';sub.textContent='WASD 이동 · 마우스 조준 · 클릭/스페이스 발사 · 1~8 업그레이드 · E 자동발사. 15·30레벨에 클래스를 고를 수 있어요. 모바일은 왼쪽 드래그 이동, 오른쪽 드래그 조준/발사. 다른 플레이어와 같은 맵에서 싸워요!';go.textContent='시작'}
+else if(md==='dead'){let best=0;try{best=+localStorage.getItem('tb')||0;if(lastDead.sc>best){best=lastDead.sc;localStorage.setItem('tb',best)}}catch(e){}
+tt.textContent='사망!';sub.textContent='최종 점수: '+lastDead.sc+' · 레벨 '+lastDead.lv+' · 최고 '+best+' · 생존 '+Math.floor((lastDead.ta||0)/60)+'분 '+((lastDead.ta||0)%60)+'초'+(lastDead.kb?' · '+lastDead.kb+'에게 처치당했어요':'');go.textContent='다시 시작'}
+else if(md==='lost'){tt.textContent='연결 끊김';sub.textContent='서버에 다시 연결하는 중이에요… (서버가 잠들어 있었다면 1분쯤 걸릴 수 있어요)'}
+else if(md==='full'){tt.textContent='서버가 가득 찼어요';sub.textContent='잠시 후 다시 시도해 주세요.';go.textContent='다시 시도'}}
+function join(){if(mode==='full'){location.reload();return}if(!ready||!ws||ws.readyState!==1)return;ws.send(JSON.stringify({t:'join',name:$('nm').value.trim().slice(0,12)}))}
+$('go').onclick=join;
+function sendMsg(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+
+// ---------- 입력 ----------
+function ui(x,y){if(state!=='play'||!you)return false;
+{const o=you.op||[];for(let i=0;i<o.length;i++){const bx=12+(i%2)*78,by=14+Math.floor(i/2)*78;if(x>=bx&&x<=bx+70&&y>=by&&y<=by+70){sendMsg({t:'cls',n:o[i]});return true}}}
+if(x>=12&&x<=212){const i=Math.floor((y-(H-12-8*22))/22);if(i>=0&&i<8){sendMsg({t:'up',i});return true}}
+return false}
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(state!=='play'){if(k==='enter')join();return}
+keys[k]=true;if(/^[1-8]$/.test(k))sendMsg({t:'up',i:+k-1});if(k==='e')auto=!auto});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
+addEventListener('blur',()=>{keys={};mouse.down=false});
+addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+cv.addEventListener('mousedown',e=>{mouse.x=e.clientX;mouse.y=e.clientY;if(ui(e.clientX,e.clientY))return;mouse.down=true});
+addEventListener('mouseup',()=>{mouse.down=false});
+function tmove(t){const o=tj.l&&tj.l.id===t.identifier?tj.l:tj.r&&tj.r.id===t.identifier?tj.r:null;if(!o)return;const dx=t.clientX-o.x,dy=t.clientY-o.y,d=Math.hypot(dx,dy);o.px=t.clientX;o.py=t.clientY;
+if(o===tj.l){const m=Math.min(1,d/50)/(d||1);o.vx=dx*m;o.vy=dy*m}else if(d>8)o.a=Math.atan2(dy,dx)}
+cv.addEventListener('touchstart',e=>{e.preventDefault();for(const t of e.changedTouches){if(ui(t.clientX,t.clientY))continue;const k=t.clientX<W/2?'l':'r';if(!tj[k]){tj[k]={id:t.identifier,x:t.clientX,y:t.clientY,vx:0,vy:0,a:aim};tmove(t)}}},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();for(const t of e.changedTouches)tmove(t)},{passive:false});
+const tend=e=>{for(const t of e.changedTouches)for(const k of['l','r'])if(tj[k]&&tj[k].id===t.identifier)tj[k]=null};
+cv.addEventListener('touchend',tend);cv.addEventListener('touchcancel',tend);
+// 입력을 초당 30번 서버로 보냄
+setInterval(()=>{if(state!=='play')return;const k=keys;
+let ax=(k.d||k.arrowright?1:0)-(k.a||k.arrowleft?1:0),ay=(k.s||k.arrowdown?1:0)-(k.w||k.arrowup?1:0),f=mouse.down||!!k[' ']||auto;
+aim=Math.atan2(mouse.y-H/2,mouse.x-W/2);
+if(tj.l){ax=tj.l.vx;ay=tj.l.vy}
+if(tj.r){aim=tj.r.a;f=true;mouse.x=W/2+Math.cos(aim)*250;mouse.y=H/2+Math.sin(aim)*250}
+const z=ZM||1;
+sendMsg({t:'in',ax:+ax.toFixed(2),ay:+ay.toFixed(2),a:+aim.toFixed(3),f:f?1:0,mx:Math.round((mouse.x-W/2)/z),my:Math.round((mouse.y-H/2)/z),vw:Math.round(W/2/z+150),vh:Math.round(H/2/z+150)})},33);
+
+connect();
+let last=performance.now(),acc=0;function loop(n){acc+=Math.min(100,n-last);last=n;while(acc>=16.67){stepAll();acc-=16.67}draw();requestAnimationFrame(loop)}requestAnimationFrame(loop);
+</script></body></html>
